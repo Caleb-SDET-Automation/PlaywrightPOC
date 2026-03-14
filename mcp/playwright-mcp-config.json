@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-server.json",
+  "_comment": "Playwright MCP Server Configuration — @playwright/mcp",
+
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "env": {
+        "PLAYWRIGHT_HEADLESS": "true",
+        "PLAYWRIGHT_BROWSER": "chromium"
+      }
+    }
+  }
+}

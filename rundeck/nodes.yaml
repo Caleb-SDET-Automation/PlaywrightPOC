@@ -1,0 +1,22 @@
+# RunDeck Node Definition for Playwright Monitor Node
+# Place at: /opt/playwright-monitor/rundeck/nodes.yaml
+
+playwright-monitor-node:
+  nodename:    playwright-monitor-node
+  hostname:    localhost
+  username:    playwright
+  description: Node running Playwright synthetic monitoring tests
+  tags:        monitoring,playwright
+  osFamily:    unix
+  osName:      Linux
+
+  # If running on Windows:
+  # osFamily:  windows
+  # osName:    Windows
+  # file-copier: jsch-scp
+  # node-executor: jsch-ssh
+
+  # Node attributes
+  playwright-version: "1.50.x"
+  node-type:          monitoring
+  environment:        production

@@ -1,0 +1,49 @@
+{
+  "name": "playwright-synthetic-monitoring",
+  "version": "1.0.0",
+  "description": "Synthetic & Real User Monitoring with Playwright for ERP and Middleware Applications",
+  "scripts": {
+    "test": "playwright test",
+    "test:login": "playwright test tests/synthetic/login.spec.ts",
+    "test:reports": "playwright test tests/synthetic/reports.spec.ts",
+    "test:api": "playwright test tests/synthetic/middleware-api.spec.ts",
+    "test:devices": "playwright test tests/synthetic/devices.spec.ts",
+    "test:workflows": "playwright test tests/synthetic/core-workflows.spec.ts",
+    "test:landing": "playwright test tests/synthetic/landing.spec.ts",
+    "monitor:all": "node scripts/run-all-sites.js",
+    "monitor:site": "node scripts/run-site.sh",
+    "monitor:schedule": "node scripts/scheduler.js",
+    "monitor:dry-run": "node scripts/run-all-sites.js --dry-run",
+    "report:open": "playwright show-report reports/html",
+    "report:merge": "playwright merge-reports reports/blob --reporter=html --output=reports/html",
+    "report:serve": "npx serve reports/consolidated -p 3000",
+    "setup:checkmk": "node scripts/setup-checkmk.js",
+    "setup:all": "node scripts/setup-all.js",
+    "mcp:server": "npx @playwright/mcp@latest",
+    "mcp:server:http": "npx @playwright/mcp@latest --port 8931"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "chalk": "^5.4.1",
+    "dotenv": "^16.4.7",
+    "fs-extra": "^11.3.0",
+    "json2csv": "^6.0.0-alpha.2",
+    "node-cron": "^3.0.3",
+    "table": "^6.9.0",
+    "uuid": "^11.1.0",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "@playwright/mcp": "^0.0.28",
+    "@playwright/test": "^1.50.1",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.13.5",
+    "@types/uuid": "^10.0.0",
+    "serve": "^14.2.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

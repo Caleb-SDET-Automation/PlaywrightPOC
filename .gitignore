@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.auth/
+reports/html/
+reports/json/
+reports/blob/
+reports/artifacts/
+reports/consolidated/index.html
+reports/consolidated/summary.json
+reports/consolidated/orchestrator-summary.json
+reports/logs/
+*.log
+.env
+.env.sites/
+test-results/
+playwright-report/

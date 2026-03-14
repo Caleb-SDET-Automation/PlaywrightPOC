@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RunDeck Job Definition — Playwright Synthetic Monitor
+  Import via: Rundeck UI > Jobs > Upload Definition (XML)
+
+  Schedule: Every 5 minutes, 24/7
+  Execution: Unattended, parallel across site groups
+  Notification: Email + Webhook on failure
+-->
+<joblist>
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <!-- JOB 1: Full Global Run (all sites) — every 5 minutes                 -->
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <job>
+    <id>playwright-monitor-global</id>
+    <name>Playwright Synthetic Monitor — Global</name>
+    <description>Runs all synthetic monitoring tests across all 80+ sites every 5 minutes</description>
+    <group>Monitoring/Playwright</group>
+    <context>
+      <project>synthetic-monitoring</project>
+    </context>
+
+    <schedule>
+      <!-- Run every 5 minutes -->
+      <crontab>0 */5 * * * ? *</crontab>
+    </schedule>
+
+    <executionEnabled>true</executionEnabled>
+    <scheduleEnabled>true</scheduleEnabled>
+
+    <!-- Options (overridable per execution) -->
+    <options>
+      <option name="SITE_GROUP"
+              label="Site Group Filter"
+              description="Limit to a specific region/group. Leave blank for all."
+              required="false"
+              defaultValue=""
+              type="text"/>
+      <option name="SITE_CONCURRENCY"
+              label="Parallel Site Runs"
+              description="Number of sites to test simultaneously"
+              required="false"
+              defaultValue="5"
+              values="2,3,4,5,6,8,10"
+              type="select"/>
+      <option name="RUN_TAGS"
+              label="Tag Filter"
+              description="Comma-separated tags (erp, ssrs). Leave blank for all."
+              required="false"
+              defaultValue=""
+              type="text"/>
+    </options>
+
+    <sequence keepgoing="false" strategy="node-first">
+      <command>
+        <script><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+
+export SITE_GROUP="@option.SITE_GROUP@"
+export SITE_CONCURRENCY="@option.SITE_CONCURRENCY@"
+export RUN_TAGS="@option.RUN_TAGS@"
+
+# Ensure working directory
+cd /opt/playwright-monitor
+
+# Load environment
+[[ -f .env ]] && source .env
+
+echo "[RunDeck] Starting Playwright Synthetic Monitor"
+echo "[RunDeck] Group: ${SITE_GROUP:-all} | Concurrency: ${SITE_CONCURRENCY}"
+echo "[RunDeck] Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+bash scripts/run-monitoring.sh
+
+EXIT_CODE=$?
+echo "[RunDeck] Completed with exit code: ${EXIT_CODE}"
+exit ${EXIT_CODE}
+]]></script>
+      </command>
+    </sequence>
+
+    <!-- Timeout: 8 minutes (allows 5-min cycle with buffer) -->
+    <timeout>480</timeout>
+
+    <!-- Notifications -->
+    <notification>
+      <onfailure>
+        <email recipients="${EMAIL_ALERT_TO}" subject="[ALERT] Playwright Monitor FAILED — @option.SITE_GROUP@">
+          <message><![CDATA[
+Playwright Synthetic Monitor job FAILED.
+
+Job: @job.name@
+Execution: @execution.id@
+Start Time: @execution.dateStarted@
+End Time: @execution.dateEnded@
+Duration: @execution.elapsed@
+
+View details: @execution.href@
+          ]]></message>
+        </email>
+        <webhook urls="${SLACK_WEBHOOK_URL}">
+          <format>json</format>
+          <message><![CDATA[{"text":"⚠️ Playwright Monitor FAILED for group: @option.SITE_GROUP@ — execution @execution.id@"}]]></message>
+        </webhook>
+      </onfailure>
+      <onsuccess>
+        <!-- Uncomment to notify on every successful run -->
+        <!--
+        <webhook urls="${SLACK_WEBHOOK_URL}">
+          <format>json</format>
+          <message><![CDATA[{"text":"✅ Playwright Monitor OK — @execution.elapsed@"}]]></message>
+        </webhook>
+        -->
+      </onsuccess>
+    </notification>
+
+    <nodefilters excludeprecedence="true">
+      <filter>name: playwright-monitor-node</filter>
+    </nodefilters>
+
+    <nodesSelectedByDefault>true</nodesSelectedByDefault>
+  </job>
+
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <!-- JOB 2: Regional Run — US East                                         -->
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <job>
+    <id>playwright-monitor-us-east</id>
+    <name>Playwright Monitor — US East</name>
+    <description>Synthetic monitoring for US East region sites — every 5 minutes</description>
+    <group>Monitoring/Playwright/Regional</group>
+    <context>
+      <project>synthetic-monitoring</project>
+    </context>
+    <schedule>
+      <crontab>0 */5 * * * ? *</crontab>
+    </schedule>
+    <executionEnabled>true</executionEnabled>
+    <scheduleEnabled>true</scheduleEnabled>
+    <sequence keepgoing="false" strategy="node-first">
+      <command>
+        <script><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/playwright-monitor
+[[ -f .env ]] && source .env
+export SITE_GROUP="us-east"
+export SITE_CONCURRENCY="${SITE_CONCURRENCY:-5}"
+bash scripts/run-monitoring.sh
+]]></script>
+      </command>
+    </sequence>
+    <timeout>480</timeout>
+  </job>
+
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <!-- JOB 3: Regional Run — Europe                                          -->
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <job>
+    <id>playwright-monitor-eu</id>
+    <name>Playwright Monitor — Europe</name>
+    <description>Synthetic monitoring for Europe region sites — every 5 minutes</description>
+    <group>Monitoring/Playwright/Regional</group>
+    <context>
+      <project>synthetic-monitoring</project>
+    </context>
+    <schedule>
+      <crontab>0 */5 * * * ? *</crontab>
+    </schedule>
+    <executionEnabled>true</executionEnabled>
+    <scheduleEnabled>true</scheduleEnabled>
+    <sequence keepgoing="false" strategy="node-first">
+      <command>
+        <script><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/playwright-monitor
+[[ -f .env ]] && source .env
+export SITE_GROUP="eu-west eu-central eu-east eu-south eu-north"
+bash scripts/run-monitoring.sh
+]]></script>
+      </command>
+    </sequence>
+    <timeout>480</timeout>
+  </job>
+
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <!-- JOB 4: API-Only Quick Check — every 2 minutes                        -->
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <job>
+    <id>playwright-monitor-api-quick</id>
+    <name>Playwright Monitor — API Quick Check</name>
+    <description>Lightweight middleware API health check — every 2 minutes</description>
+    <group>Monitoring/Playwright</group>
+    <context>
+      <project>synthetic-monitoring</project>
+    </context>
+    <schedule>
+      <crontab>0 */2 * * * ? *</crontab>
+    </schedule>
+    <executionEnabled>true</executionEnabled>
+    <scheduleEnabled>true</scheduleEnabled>
+    <sequence keepgoing="false" strategy="node-first">
+      <command>
+        <script><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/playwright-monitor
+[[ -f .env ]] && source .env
+export RUN_TAGS="api"
+npx playwright test tests/synthetic/middleware-api.spec.ts \
+  --reporter=list,json \
+  --output=reports/artifacts/api-quick
+]]></script>
+      </command>
+    </sequence>
+    <timeout>120</timeout>
+  </job>
+
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <!-- JOB 5: Cleanup — daily at 02:00                                       -->
+  <!-- ───────────────────────────────────────────────────────────────────── -->
+  <job>
+    <id>playwright-monitor-cleanup</id>
+    <name>Playwright Monitor — Report Cleanup</name>
+    <description>Remove reports older than REPORT_RETENTION_DAYS (default 30)</description>
+    <group>Monitoring/Playwright/Maintenance</group>
+    <context>
+      <project>synthetic-monitoring</project>
+    </context>
+    <schedule>
+      <crontab>0 0 2 * * ? *</crontab>
+    </schedule>
+    <executionEnabled>true</executionEnabled>
+    <scheduleEnabled>true</scheduleEnabled>
+    <sequence keepgoing="false" strategy="node-first">
+      <command>
+        <script><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+RETAIN_DAYS="${REPORT_RETENTION_DAYS:-30}"
+REPORT_DIR="/opt/playwright-monitor/reports"
+echo "Removing reports older than ${RETAIN_DAYS} days from ${REPORT_DIR}"
+find "${REPORT_DIR}" -type f -mtime "+${RETAIN_DAYS}" -name "*.json" -delete
+find "${REPORT_DIR}/logs" -type f -mtime "+${RETAIN_DAYS}" -name "*.log" -delete
+find "${REPORT_DIR}/artifacts" -type d -empty -delete
+echo "Cleanup complete"
+]]></script>
+      </command>
+    </sequence>
+  </job>
+</joblist>
