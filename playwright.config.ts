@@ -76,6 +76,12 @@ export default defineConfig({
       testMatch: /tests\/synthetic\/.*.spec.ts/,
       use: {
         ...devices['Desktop Chrome'],
+        // Use system Chrome (not bundled Chromium) so that Cloudflare-protected
+        // sites are not blocked by headless-Chromium TLS fingerprinting.
+        // Falls back gracefully if channel is unavailable.
+        channel: 'chrome',
+        // Give Dolibarr and similar heavy-JS pages more time before DOMContentLoaded
+        navigationTimeout: 60_000,
         storageState: fs.existsSync('.auth/state.json') ? '.auth/state.json' : undefined,
       },
       dependencies: ['setup'],
