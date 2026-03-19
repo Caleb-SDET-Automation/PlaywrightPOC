@@ -1,0 +1,77 @@
+name: Synthetic monitoring (every 5 minutes)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: synthetic-monitoring
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CI: "true"
+      RUN_MODE: synthetic
+      WORKERS: "4"
+      RETRIES: "1"
+      HEADLESS: "true"
+
+      # Optional: wire these up as GitHub Secrets if your tests need them
+      CHECKMK_URL: ${{ secrets.CHECKMK_URL }}
+      CHECKMK_SITE: ${{ secrets.CHECKMK_SITE }}
+      CHECKMK_USERNAME: ${{ secrets.CHECKMK_USERNAME }}
+      CHECKMK_SECRET: ${{ secrets.CHECKMK_SECRET }}
+      ERP_USERNAME: ${{ secrets.ERP_USERNAME }}
+      ERP_PASSWORD: ${{ secrets.ERP_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure Google Chrome exists (for channel: chrome)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+            exit 0
+          fi
+          if command -v google-chrome-stable >/dev/null 2>&1; then
+            google-chrome-stable --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          google-chrome --version || true
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run monitoring
+        run: npm run monitor:all
+
+      - name: Upload reports/artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-reports
+          path: |
+            reports/html
+            reports/json
+            reports/artifacts
+          if-no-files-found: ignore
+          retention-days: 7

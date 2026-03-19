@@ -4,6 +4,7 @@ dist/
 .DS_Store
 **/.DS_Store
 reports/html/
+reports/html-demo/
 reports/json/
 reports/blob/
 reports/artifacts/
