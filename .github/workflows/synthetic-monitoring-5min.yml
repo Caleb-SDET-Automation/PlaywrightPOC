@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Ensure Google Chrome exists (for channel: chrome)
+      - name: "Ensure Google Chrome exists (for channel: chrome)"
         shell: bash
         run: |
           set -euo pipefail
