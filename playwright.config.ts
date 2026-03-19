@@ -37,7 +37,8 @@ export default defineConfig({
 
     /* Screenshots on failure */
     screenshot: 'only-on-failure',
-    video:      'retain-on-failure',
+    // Default keeps storage manageable; set VIDEO=on to always record.
+    video:      (process.env.VIDEO as any) || 'retain-on-failure',
     trace:      'on-first-retry',
 
     /* Auth storage per site — only if file exists */

@@ -23,6 +23,12 @@ interface TestRecord {
   duration:    number;
   error?:      string;
   perfData:    Record<string, string>;
+  artifacts?:  {
+    videos: string[];
+    traces: string[];
+    screenshots: string[];
+    others: string[];
+  };
   timestamp:   string;
 }
 
@@ -41,6 +47,7 @@ class ConsolidatedReporter implements Reporter {
   private records: TestRecord[] = [];
   private startTime = Date.now();
   private outputDir: string;
+  private artifactsRelRoot = '../artifacts';
 
   constructor() {
     this.outputDir = process.env.REPORT_OUTPUT_DIR
@@ -62,6 +69,8 @@ class ConsolidatedReporter implements Reporter {
       }
     }
 
+    const artifacts = this.extractArtifacts(result);
+
     this.records.push({
       siteId:    process.env.SITE_ID   || 'default',
       siteName:  process.env.SITE_NAME || 'Default',
@@ -71,6 +80,7 @@ class ConsolidatedReporter implements Reporter {
       duration:  result.duration ?? 0,
       error:     result.error?.message?.split('\n')[0],
       perfData:  perf,
+      artifacts,
       timestamp: new Date().toISOString(),
     });
   }
@@ -165,6 +175,9 @@ class ConsolidatedReporter implements Reporter {
           <td>${r.suite}</td>
           <td>${r.test}</td>
           <td><span class="badge" style="background:${statusColor(r.status)}">${r.status}</span></td>
+          <td style="font-size:0.85em">
+            ${this.renderArtifactLinks(r)}
+          </td>
           <td style="font-size:0.8em;color:#ef4444">${r.error || ''}</td>
         </tr>`).join('');
 
@@ -250,7 +263,7 @@ class ConsolidatedReporter implements Reporter {
   <h2>Failed / Errored Checks</h2>
   <table>
     <thead>
-      <tr><th>Site</th><th>Suite</th><th>Test</th><th>Status</th><th>Error</th></tr>
+      <tr><th>Site</th><th>Suite</th><th>Test</th><th>Status</th><th>Artifacts</th><th>Error</th></tr>
     </thead>
     <tbody>${failedTests}</tbody>
   </table>` : ''}
@@ -258,6 +271,75 @@ class ConsolidatedReporter implements Reporter {
   <div class="meta">Auto-refreshes every 5 minutes &nbsp;|&nbsp; Powered by Playwright Synthetic Monitor</div>
 </body>
 </html>`;
+  }
+
+  private extractArtifacts(result: TestResult): TestRecord['artifacts'] {
+    const videos: string[] = [];
+    const traces: string[] = [];
+    const screenshots: string[] = [];
+    const others: string[] = [];
+
+    for (const a of result.attachments ?? []) {
+      if (!a.path) continue;
+      const p = this.toArtifactHref(a.path);
+      if (!p) continue;
+
+      const lowerName = (a.name || '').toLowerCase();
+      const lowerPath = p.toLowerCase();
+
+      if (lowerName.includes('video') || lowerPath.endsWith('.webm')) videos.push(p);
+      else if (lowerName.includes('trace') || lowerPath.endsWith('.zip')) traces.push(p);
+      else if (lowerName.includes('screenshot') || lowerPath.endsWith('.png')) screenshots.push(p);
+      else others.push(p);
+    }
+
+    return { videos, traces, screenshots, others };
+  }
+
+  private toArtifactHref(attachmentPath: string): string | undefined {
+    // Playwright typically provides paths like "reports/artifacts/<...>" (relative),
+    // but we normalize either relative or absolute paths into a link relative to
+    // reports/consolidated/ (i.e. ../artifacts/...).
+    const norm = attachmentPath.replace(/\\/g, '/');
+    const marker = '/reports/artifacts/';
+    const idx = norm.lastIndexOf(marker);
+    if (idx !== -1) {
+      const rest = norm.slice(idx + marker.length);
+      return `${this.artifactsRelRoot}/${rest}`;
+    }
+    if (norm.startsWith('reports/artifacts/')) {
+      return `${this.artifactsRelRoot}/${norm.slice('reports/artifacts/'.length)}`;
+    }
+    // If it's already a relative path into artifacts, keep as-is.
+    if (norm.startsWith('artifacts/')) return `../${norm}`;
+    return undefined;
+  }
+
+  private renderArtifactLinks(r: TestRecord): string {
+    const a = r.artifacts;
+    if (!a) return '';
+
+    const chunks: string[] = [];
+    const mk = (label: string, href: string) =>
+      `<a href="${href}" target="_blank" rel="noreferrer" style="color:#93c5fd;text-decoration:none">${label}</a>`;
+
+    if (a.videos?.length) {
+      // Show a convenient inline player for the first video, plus direct links.
+      const first = a.videos[0];
+      chunks.push(`
+        <details style="display:inline-block; vertical-align:top;">
+          <summary style="cursor:pointer; color:#93c5fd;">video</summary>
+          <video src="${first}" controls preload="metadata" style="max-width:520px; max-height:320px; margin-top:6px; border-radius:8px; background:#0b1220;"></video>
+          <div style="margin-top:6px;">${a.videos.map((p, i) => mk(`open${a.videos.length > 1 ? `#${i + 1}` : ''}`, p)).join(' &nbsp;|&nbsp; ')}</div>
+        </details>
+      `);
+    }
+
+    if (a.screenshots?.length) chunks.push(a.screenshots.map((p, i) => mk(`screenshot${a.screenshots.length > 1 ? `#${i + 1}` : ''}`, p)).join(' &nbsp;|&nbsp; '));
+    if (a.traces?.length) chunks.push(a.traces.map((p, i) => mk(`trace${a.traces.length > 1 ? `#${i + 1}` : ''}`, p)).join(' &nbsp;|&nbsp; '));
+    if (a.others?.length) chunks.push(a.others.map((p, i) => mk(`file${i + 1}`, p)).join(' &nbsp;|&nbsp; '));
+
+    return chunks.filter(Boolean).join(' &nbsp;|&nbsp; ');
   }
 
   private printConsoleSummary(sites: SiteSummary[], overallStatus: string): void {

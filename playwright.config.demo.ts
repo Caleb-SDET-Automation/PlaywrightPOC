@@ -15,12 +15,16 @@ const PORT = parseInt(process.env.DEMO_PORT || '3333', 10);
 
 export default defineConfig({
   testDir:       './tests/synthetic',
-  testMatch:     /demo-app\.spec\.ts/,
-  timeout:       30_000,
-  expect:        { timeout: 10_000 },
-  fullyParallel: false,
+  // Run both demo-app + OrangeHRM demo specs.
+  testMatch:     /(?:demo-app|orangehrm)\.spec\.ts/,
+  timeout:       6 * 60_000, // allow long end-to-end demo flow
+  expect:        { timeout: 30_000 },
+  fullyParallel: true,
   retries:       0,
-  workers:       1,
+  workers:       parseInt(process.env.DEMO_WORKERS || '2', 10),
+
+  // Put demo run artifacts (videos/traces/screens) somewhere obvious.
+  outputDir: 'reports/artifacts-demo',
 
   reporter: [
     ['list'],
@@ -31,7 +35,7 @@ export default defineConfig({
     baseURL:    `http://localhost:${PORT}`,
     headless:   false,
     screenshot: 'on',
-    video:      'on',
+    video:      { mode: 'on' },
     trace:      'on',
   },
 
@@ -46,7 +50,8 @@ export default defineConfig({
   webServer: {
     command:             `node demo-app/index.js`,
     url:                 `http://localhost:${PORT}/health`,
-    reuseExistingServer: !process.env.CI,
+    // Always reuse if already running (local dev + CI stability).
+    reuseExistingServer: true,
     timeout:             10_000,
     env: {
       DEMO_PORT:     String(PORT),

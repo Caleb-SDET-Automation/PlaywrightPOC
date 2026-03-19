@@ -1,10 +1,13 @@
 node_modules/
 dist/
 .auth/
+.DS_Store
+**/.DS_Store
 reports/html/
 reports/json/
 reports/blob/
 reports/artifacts/
+reports/artifacts-demo/
 reports/consolidated/index.html
 reports/consolidated/summary.json
 reports/consolidated/orchestrator-summary.json

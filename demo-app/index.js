@@ -15,10 +15,15 @@
  *   POST /inventory/:id/edit     → save updated item               (auth)
  *   POST /inventory/:id/delete   → delete item                     (auth)
  *   GET  /reports                → category & status reports       (auth)
+ *   GET  /audit                  → audit log (create/edit/delete)  (auth)
+ *   GET  /jobs                   → background jobs UI             (auth)
  *   GET  /health                 → JSON health probe
  *   GET  /api/inventory          → JSON full list
  *   GET  /api/inventory/:id      → JSON single item
  *   GET  /api/stats              → JSON KPI totals
+ *   GET  /api/audit              → JSON audit log
+ *   POST /api/jobs/reconcile     → start long-running job
+ *   GET  /api/jobs/:id           → job status
  */
 
 const http        = require('http');
@@ -28,6 +33,7 @@ const { URL }     = require('url');
 const PORT     = parseInt(process.env.DEMO_PORT     || '3333', 10);
 const USERNAME = process.env.DEMO_USERNAME           || 'admin';
 const PASSWORD = process.env.DEMO_PASSWORD           || 'demo1234';
+const JOB_DURATION_MS = parseInt(process.env.DEMO_JOB_DURATION_MS || '15000', 10); // ~15s default
 
 // ── Session store ─────────────────────────────────────────────────────────────
 const sessions = new Map();
@@ -35,17 +41,82 @@ const sessions = new Map();
 // ── Mutable inventory (supports full CRUD) ────────────────────────────────────
 let nextId = 11;
 let INVENTORY = [
-  { id:  1, sku: 'PRD-001', name: 'Widget Alpha',    category: 'Widgets',    qty: 142, price:  29.99, status: 'in-stock'     },
-  { id:  2, sku: 'PRD-002', name: 'Gadget Beta',     category: 'Gadgets',    qty:  87, price:  49.99, status: 'in-stock'     },
-  { id:  3, sku: 'PRD-003', name: 'Component Gamma', category: 'Components', qty:   0, price:  12.50, status: 'out-of-stock' },
-  { id:  4, sku: 'PRD-004', name: 'Module Delta',    category: 'Modules',    qty:  34, price:  89.00, status: 'in-stock'     },
-  { id:  5, sku: 'PRD-005', name: 'Unit Epsilon',    category: 'Units',      qty:   5, price: 199.99, status: 'low-stock'    },
-  { id:  6, sku: 'PRD-006', name: 'Part Zeta',       category: 'Parts',      qty: 210, price:   8.75, status: 'in-stock'     },
-  { id:  7, sku: 'PRD-007', name: 'Device Eta',      category: 'Devices',    qty:   0, price: 349.00, status: 'out-of-stock' },
-  { id:  8, sku: 'PRD-008', name: 'System Theta',    category: 'Systems',    qty:  19, price: 599.99, status: 'in-stock'     },
-  { id:  9, sku: 'PRD-009', name: 'Tool Iota',       category: 'Tools',      qty:  73, price:  24.99, status: 'in-stock'     },
-  { id: 10, sku: 'PRD-010', name: 'Kit Kappa',       category: 'Kits',       qty:   2, price: 149.50, status: 'low-stock'    },
+  { id:  1, sku: 'PRD-001', name: 'Widget Alpha',    category: 'Widgets',    qty: 142, price:  29.99, status: 'in-stock',     version: 1 },
+  { id:  2, sku: 'PRD-002', name: 'Gadget Beta',     category: 'Gadgets',    qty:  87, price:  49.99, status: 'in-stock',     version: 1 },
+  { id:  3, sku: 'PRD-003', name: 'Component Gamma', category: 'Components', qty:   0, price:  12.50, status: 'out-of-stock', version: 1 },
+  { id:  4, sku: 'PRD-004', name: 'Module Delta',    category: 'Modules',    qty:  34, price:  89.00, status: 'in-stock',     version: 1 },
+  { id:  5, sku: 'PRD-005', name: 'Unit Epsilon',    category: 'Units',      qty:   5, price: 199.99, status: 'low-stock',    version: 1 },
+  { id:  6, sku: 'PRD-006', name: 'Part Zeta',       category: 'Parts',      qty: 210, price:   8.75, status: 'in-stock',     version: 1 },
+  { id:  7, sku: 'PRD-007', name: 'Device Eta',      category: 'Devices',    qty:   0, price: 349.00, status: 'out-of-stock', version: 1 },
+  { id:  8, sku: 'PRD-008', name: 'System Theta',    category: 'Systems',    qty:  19, price: 599.99, status: 'in-stock',     version: 1 },
+  { id:  9, sku: 'PRD-009', name: 'Tool Iota',       category: 'Tools',      qty:  73, price:  24.99, status: 'in-stock',     version: 1 },
+  { id: 10, sku: 'PRD-010', name: 'Kit Kappa',       category: 'Kits',       qty:   2, price: 149.50, status: 'low-stock',    version: 1 },
 ];
+
+// ── Audit log (in-memory) ─────────────────────────────────────────────────────
+const AUDIT = [];
+let nextAuditId = 1;
+function audit(user, action, details) {
+  AUDIT.unshift({
+    id: nextAuditId++,
+    ts: new Date().toISOString(),
+    user,
+    action,
+    details,
+  });
+  if (AUDIT.length > 250) AUDIT.length = 250;
+}
+
+// ── Background jobs (in-memory) ───────────────────────────────────────────────
+const JOBS = new Map();
+let nextJobId = 1;
+function startJob(type, user) {
+  const id = String(nextJobId++);
+  const startedAt = Date.now();
+  const durationMs = Math.max(5_000, JOB_DURATION_MS || 60_000);
+  const job = { id, type, user, startedAt, durationMs, status: 'running', error: null };
+  JOBS.set(id, job);
+  audit(user, 'START_JOB', `JOB=${type} id=${id} durationMs=${durationMs}`);
+  return job;
+}
+function jobStatus(id) {
+  const job = JOBS.get(String(id));
+  if (!job) return null;
+  if (job.status === 'cancelled' || job.status === 'failed') {
+    const now = Date.now();
+    const elapsed = now - job.startedAt;
+    const progress = Math.max(0, Math.min(100, Math.round((elapsed / job.durationMs) * 100)));
+    return { ...job, progress, elapsedMs: elapsed };
+  }
+  const now = Date.now();
+  const elapsed = now - job.startedAt;
+  const progress = Math.max(0, Math.min(100, Math.round((elapsed / job.durationMs) * 100)));
+  const failAt = job.type === 'backup' ? 60 : null; // backup job fails around 60%
+  const shouldFail = failAt !== null && progress >= failAt;
+  const done = elapsed >= job.durationMs;
+
+  if (shouldFail && job.status === 'running') {
+    job.status = 'failed';
+    job.error = 'Simulated failure: upstream storage unavailable';
+    audit(job.user, 'FAIL_JOB', `JOB=${job.type} id=${job.id} error="${job.error}"`);
+    return { ...job, progress, elapsedMs: elapsed };
+  }
+  if (done && job.status !== 'completed') {
+    job.status = 'completed';
+    audit(job.user, 'COMPLETE_JOB', `JOB=${job.type} id=${job.id}`);
+  }
+  return { ...job, progress, elapsedMs: elapsed };
+}
+
+function cancelJob(id, user) {
+  const job = JOBS.get(String(id));
+  if (!job) return null;
+  if (job.status === 'running') {
+    job.status = 'cancelled';
+    audit(user, 'CANCEL_JOB', `JOB=${job.type} id=${job.id}`);
+  }
+  return jobStatus(id);
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function parseCookies(req) {
@@ -80,6 +151,8 @@ function layout(title, body, user) {
         <a href="/dashboard" data-testid="nav-dashboard">Dashboard</a>
         <a href="/inventory" data-testid="nav-inventory">Inventory</a>
         <a href="/reports"   data-testid="nav-reports">Reports</a>
+        <a href="/audit"     data-testid="nav-audit">Audit</a>
+        <a href="/jobs"      data-testid="nav-jobs">Jobs</a>
         <span class="spacer"></span>
         <span class="nav-user" data-testid="nav-user">${esc(user)}</span>
         <form method="POST" action="/logout" style="display:inline">
@@ -341,6 +414,7 @@ function renderInventoryForm(item, user, error) {
       <div class="card">
         ${errorHtml}
         <form method="POST" action="${action}" data-testid="inventory-form">
+          ${isEdit ? `<input type="hidden" name="version" value="${esc(String(item.version ?? 1))}" data-testid="input-version">` : ''}
           <div class="form-grid">
             <div class="form-group">
               <label for="sku">SKU</label>
@@ -432,6 +506,118 @@ function renderReports(user) {
     </div>`, user);
 }
 
+// ── Page: Audit ───────────────────────────────────────────────────────────────
+function renderAudit(user) {
+  const rows = AUDIT.slice(0, 25).map(e => `
+    <tr data-testid="audit-row">
+      <td data-testid="audit-ts">${esc(e.ts)}</td>
+      <td data-testid="audit-user">${esc(e.user)}</td>
+      <td data-testid="audit-action">${esc(e.action)}</td>
+      <td data-testid="audit-details">${esc(e.details)}</td>
+    </tr>`).join('');
+
+  return layout('Audit Log', `
+    <div class="container">
+      <h1 data-testid="page-title">Audit Log</h1>
+      <div class="card">
+        <table data-testid="audit-table">
+          <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody data-testid="audit-tbody">${rows}</tbody>
+        </table>
+      </div>
+    </div>`, user);
+}
+
+// ── Page: Jobs ────────────────────────────────────────────────────────────────
+function renderJobs(user) {
+  return layout('Jobs', `
+    <div class="container">
+      <div class="page-header">
+        <h1 data-testid="page-title">Jobs</h1>
+      </div>
+      <div class="card">
+        <div class="section-title">Background Jobs (simulated)</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap">
+          <button class="btn-primary" data-testid="btn-start-reconcile" type="button">Start Reconcile Job</button>
+          <button class="btn-primary" data-testid="btn-start-backup" type="button" style="background:#0ea5e9">Start Backup Job (fails)</button>
+          <button class="btn-cancel" data-testid="btn-cancel-job" type="button">Cancel Current Job</button>
+        </div>
+        <div style="margin-top:14px;font-size:13px;color:#374151">
+          Status: <strong data-testid="job-status">idle</strong>
+          &nbsp;|&nbsp; Progress: <strong data-testid="job-progress">0%</strong>
+          &nbsp;|&nbsp; Job ID: <strong data-testid="job-id">—</strong>
+        </div>
+        <div data-testid="job-error" style="margin-top:10px; display:none" class="form-error"></div>
+        <div style="margin-top:10px;height:10px;background:#e5e7eb;border-radius:9999px;overflow:hidden">
+          <div data-testid="job-progress-bar" style="height:10px;width:0%;background:#4f46e5"></div>
+        </div>
+      </div>
+
+      <script>
+        (function(){
+          const btnReconcile = document.querySelector('[data-testid=\"btn-start-reconcile\"]');
+          const btnBackup = document.querySelector('[data-testid=\"btn-start-backup\"]');
+          const btnCancel = document.querySelector('[data-testid=\"btn-cancel-job\"]');
+          const statusEl = document.querySelector('[data-testid=\"job-status\"]');
+          const progressEl = document.querySelector('[data-testid=\"job-progress\"]');
+          const idEl = document.querySelector('[data-testid=\"job-id\"]');
+          const bar = document.querySelector('[data-testid=\"job-progress-bar\"]');
+          const errEl = document.querySelector('[data-testid=\"job-error\"]');
+
+          let activeId = null;
+          let timer = null;
+
+          function setError(msg){
+            if(!msg){ errEl.style.display='none'; errEl.textContent=''; return; }
+            errEl.style.display='block';
+            errEl.textContent=msg;
+          }
+
+          async function poll(){
+            if(!activeId) return;
+            const r = await fetch('/api/jobs/' + activeId);
+            if(!r.ok) return;
+            const j = await r.json();
+            statusEl.textContent = j.status;
+            progressEl.textContent = j.progress + '%';
+            idEl.textContent = j.id;
+            bar.style.width = j.progress + '%';
+            if(j.status === 'failed') setError(j.error || 'Job failed');
+            else setError('');
+            if(j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled') {
+              clearInterval(timer); timer = null; activeId = null;
+            }
+          }
+
+          async function start(endpoint, disableBtn){
+            if(disableBtn) disableBtn.disabled = true;
+            setError('');
+            const r = await fetch(endpoint, { method: 'POST' });
+            const j = await r.json();
+            activeId = j.id;
+            statusEl.textContent = j.status;
+            progressEl.textContent = (j.progress || 0) + '%';
+            idEl.textContent = j.id;
+            bar.style.width = (j.progress || 0) + '%';
+            if(j.status === 'failed') setError(j.error || 'Job failed');
+            if(timer) clearInterval(timer);
+            timer = setInterval(poll, 1500);
+            // allow re-run after completion
+            setTimeout(() => { if(disableBtn) disableBtn.disabled = false; }, 1500);
+          }
+
+          btnReconcile.addEventListener('click', () => start('/api/jobs/reconcile', btnReconcile));
+          btnBackup.addEventListener('click', () => start('/api/jobs/backup', btnBackup));
+          btnCancel.addEventListener('click', async () => {
+            if(!activeId) return;
+            await fetch('/api/jobs/' + activeId + '/cancel', { method: 'POST' });
+            await poll();
+          });
+        })();
+      </script>
+    </div>`, user);
+}
+
 // ── Request handler ───────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   const parsed   = new URL(req.url, `http://localhost:${PORT}`);
@@ -486,6 +672,36 @@ const server = http.createServer(async (req, res) => {
     return jsonOk({ totalItems: INVENTORY.length, inStock, lowStock, outOfStock, inventoryValue: Math.round(INVENTORY.reduce((s, i) => s + i.price * i.qty, 0) * 100) / 100 });
   }
 
+  if (pathname === '/api/audit') return jsonOk(AUDIT);
+
+  // ── Jobs API (auth required, but safe even if called unauthenticated) ───────
+  if (req.method === 'POST' && pathname === '/api/jobs/reconcile') {
+    if (!user) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'unauthorized' })); }
+    const job = startJob('reconcile', user);
+    const st = jobStatus(job.id);
+    return jsonOk(st);
+  }
+  if (req.method === 'POST' && pathname === '/api/jobs/backup') {
+    if (!user) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'unauthorized' })); }
+    const job = startJob('backup', user);
+    const st = jobStatus(job.id);
+    return jsonOk(st);
+  }
+  const jobMatch = pathname.match(/^\/api\/jobs\/(\d+)$/);
+  if (jobMatch) {
+    if (!user) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'unauthorized' })); }
+    const st = jobStatus(jobMatch[1]);
+    if (!st) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'not found' })); }
+    return jsonOk(st);
+  }
+  const cancelMatch = pathname.match(/^\/api\/jobs\/(\d+)\/cancel$/);
+  if (req.method === 'POST' && cancelMatch) {
+    if (!user) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'unauthorized' })); }
+    const st = cancelJob(cancelMatch[1], user);
+    if (!st) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'not found' })); }
+    return jsonOk(st);
+  }
+
   // ── Public pages ────────────────────────────────────────────────────────────
   if (pathname === '/') { res.writeHead(302, { 'Location': user ? '/dashboard' : '/login' }); return res.end(); }
   if (pathname === '/login') {
@@ -505,6 +721,12 @@ const server = http.createServer(async (req, res) => {
   // ── Reports ─────────────────────────────────────────────────────────────────
   if (pathname === '/reports') return html(renderReports(user));
 
+  // ── Audit ───────────────────────────────────────────────────────────────────
+  if (pathname === '/audit') return html(renderAudit(user));
+
+  // ── Jobs ────────────────────────────────────────────────────────────────────
+  if (pathname === '/jobs') return html(renderJobs(user));
+
   // ── CREATE: GET /inventory/new ───────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/inventory/new') {
     return html(renderInventoryForm(null, user, null));
@@ -516,7 +738,7 @@ const server = http.createServer(async (req, res) => {
     if (INVENTORY.find(i => i.sku === p.sku)) {
       return html(renderInventoryForm(null, user, `SKU "${p.sku}" already exists.`));
     }
-    INVENTORY.push({
+    const created = {
       id:       nextId++,
       sku:      p.sku.trim(),
       name:     p.name.trim(),
@@ -524,7 +746,10 @@ const server = http.createServer(async (req, res) => {
       qty:      parseInt(p.qty, 10) || 0,
       price:    parseFloat(p.price) || 0,
       status:   p.status || 'in-stock',
-    });
+      version:  1,
+    };
+    INVENTORY.push(created);
+    audit(user, 'CREATE_ITEM', `SKU=${created.sku} NAME=${created.name}`);
     return redirect('/inventory');
   }
 
@@ -542,15 +767,32 @@ const server = http.createServer(async (req, res) => {
     const item = INVENTORY.find(i => i.id === parseInt(editPostMatch[1], 10));
     if (!item) return redirect('/inventory');
     const p = Object.fromEntries(new URLSearchParams(await readBody(req)));
+
+    // Optimistic concurrency check (stale form submission)
+    const incomingVersion = parseInt(p.version, 10);
+    const currentVersion = parseInt(String(item.version ?? 1), 10);
+    if (Number.isFinite(incomingVersion) && incomingVersion !== currentVersion) {
+      return html(
+        renderInventoryForm(
+          item,
+          user,
+          `This item was updated by someone else. Please reload and try again. (current v${currentVersion}, submitted v${incomingVersion})`
+        )
+      );
+    }
+
     // SKU uniqueness: allow same SKU (own record), block if taken by another
     const conflict = INVENTORY.find(i => i.sku === p.sku.trim() && i.id !== item.id);
     if (conflict) return html(renderInventoryForm(item, user, `SKU "${p.sku}" is already used by another item.`));
+    const before = { sku: item.sku, name: item.name, qty: item.qty, status: item.status, version: item.version ?? 1 };
     item.sku      = p.sku.trim();
     item.name     = p.name.trim();
     item.category = p.category.trim();
     item.qty      = parseInt(p.qty, 10) || 0;
     item.price    = parseFloat(p.price) || 0;
     item.status   = p.status || item.status;
+    item.version  = currentVersion + 1;
+    audit(user, 'UPDATE_ITEM', `SKU=${before.sku} v${before.version}->v${item.version} qty ${before.qty}->${item.qty} status ${before.status}->${item.status}`);
     return redirect('/inventory');
   }
 
@@ -558,7 +800,9 @@ const server = http.createServer(async (req, res) => {
   const deleteMatch = pathname.match(/^\/inventory\/(\d+)\/delete$/);
   if (req.method === 'POST' && deleteMatch) {
     const id = parseInt(deleteMatch[1], 10);
+    const found = INVENTORY.find(i => i.id === id);
     INVENTORY = INVENTORY.filter(i => i.id !== id);
+    if (found) audit(user, 'DELETE_ITEM', `SKU=${found.sku} NAME=${found.name}`);
     return redirect('/inventory');
   }
 

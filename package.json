@@ -12,6 +12,8 @@
     "test:landing": "playwright test tests/synthetic/landing.spec.ts",
     "test:demo": "playwright test --config=playwright.config.demo.ts",
     "test:demo:headed": "playwright test --config=playwright.config.demo.ts --headed",
+    "demo:videos:merge": "node scripts/merge-demo-videos.js",
+    "test:demo:merged": "npm run test:demo && npm run demo:videos:merge",
     "demo:server": "node demo-app/index.js",
     "report:demo": "playwright show-report reports/html-demo",
     "monitor:all": "node scripts/run-all-sites.js",

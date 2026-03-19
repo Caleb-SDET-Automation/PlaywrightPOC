@@ -22,8 +22,11 @@ const BASE = process.env.BASE_URL      || 'http://localhost:3333';
 const USER = process.env.DEMO_USERNAME || 'admin';
 const PASS = process.env.DEMO_PASSWORD || 'demo1234';
 
-// ─── Flow 0: API Validation ──────────────────────────────────────────────────
-test('Flow 0: API Validation', async ({ request }) => {
+// Demo app tests mutate shared in-memory inventory, so keep them serial even if the runner is parallel.
+test.describe.configure({ mode: 'serial' });
+
+// ─── Flow 1: API Validation ──────────────────────────────────────────────────
+test('Flow 1: API Validation', async ({ request }) => {
   // -- /health --
   const healthRes = await request.get(`${BASE}/health`);
   expect(healthRes.status()).toBe(200);
@@ -76,8 +79,8 @@ test('Flow 0: API Validation', async ({ request }) => {
   expect(stats.inStock + stats.lowStock + stats.outOfStock).toBe(stats.totalItems);
 });
 
-// ─── Flow 1: Login ───────────────────────────────────────────────────────────
-test('Flow 1: Login', async ({ page }) => {
+// ─── Flow 2: Login ───────────────────────────────────────────────────────────
+test('Flow 2: Login', async ({ page }) => {
   const login = new LoginPage(page);
 
   // -- page render --
@@ -115,8 +118,8 @@ test('Flow 1: Login', async ({ page }) => {
   await expect(page).toHaveURL(`${BASE}/login`);
 });
 
-// ─── Flow 2: Dashboard ───────────────────────────────────────────────────────
-test('Flow 2: Dashboard', async ({ page }) => {
+// ─── Flow 3: Dashboard ───────────────────────────────────────────────────────
+test('Flow 3: Dashboard', async ({ page }) => {
   const login = new LoginPage(page);
   await login.loginAs(USER, PASS);
 
@@ -153,8 +156,8 @@ test('Flow 2: Dashboard', async ({ page }) => {
   await expect(page).toHaveURL(`${BASE}/reports`);
 });
 
-// ─── Flow 3: Inventory ───────────────────────────────────────────────────────
-test('Flow 3: Inventory', async ({ page }) => {
+// ─── Flow 4: Inventory ───────────────────────────────────────────────────────
+test('Flow 4: Inventory', async ({ page }) => {
   const login = new LoginPage(page);
   await login.loginAs(USER, PASS);
 
@@ -183,8 +186,8 @@ test('Flow 3: Inventory', async ({ page }) => {
   await expect(inventory.headers()).toHaveCount(7); // SKU, Name, Category, Qty, Price, Status, Actions
 });
 
-// ─── Flow 4: Reports ─────────────────────────────────────────────────────────
-test('Flow 4: Reports', async ({ page }) => {
+// ─── Flow 5: Reports ─────────────────────────────────────────────────────────
+test('Flow 5: Reports', async ({ page }) => {
   const login = new LoginPage(page);
   await login.loginAs(USER, PASS);
 
@@ -218,8 +221,8 @@ test('Flow 4: Reports', async ({ page }) => {
   }
 });
 
-// ─── Flow 5: CRUD Operations ─────────────────────────────────────────────────
-test('Flow 5: CRUD Operations', async ({ page }) => {
+// ─── Flow 6: CRUD Operations ─────────────────────────────────────────────────
+test('Flow 6: CRUD Operations', async ({ page }) => {
   const TEST_SKU = 'TST-001';
 
   const login     = new LoginPage(page);
@@ -281,4 +284,258 @@ test('Flow 5: CRUD Operations', async ({ page }) => {
 
   await expect(inventory.rowBySku(TEST_SKU)).not.toBeVisible();
   await expect(inventory.rows()).toHaveCount(countBefore - 1);
+});
+
+// ─── Flow 7: Long enterprise workflow (>3 min) ───────────────────────────
+test('Flow 7: Long workflow (CRUD + concurrency + audit + background jobs)', async ({ context }) => {
+  // Single-tab end-to-end master flow. Keep bounded so it can’t hang forever.
+  test.setTimeout(180_000);
+  const TEST_SKU = 'TST-LONG-01';
+
+  // Single tab/page for the entire flow.
+  const pageA = await context.newPage();
+
+  const loginA = new LoginPage(pageA);
+  const invA   = new InventoryPage(pageA);
+  const formA  = new InventoryFormPage(pageA);
+  const dashboardA = new DashboardPage(pageA);
+  const reportsA   = new ReportsPage(pageA);
+
+  // Login once (shared session)
+  await loginA.loginAs(USER, PASS);
+
+  // ── Tab validations: Dashboard ↔ API stats/inventory ────────────────────────
+  await expect(pageA).toHaveURL(`${BASE}/dashboard`);
+  await expect(dashboardA.pageTitle).toHaveText('Dashboard');
+
+  // Main nav tabs visible
+  await expect(pageA.getByTestId('main-nav')).toBeVisible();
+  await expect(pageA.getByTestId('nav-dashboard')).toBeVisible();
+  await expect(pageA.getByTestId('nav-inventory')).toBeVisible();
+  await expect(pageA.getByTestId('nav-reports')).toBeVisible();
+  await expect(pageA.getByTestId('nav-audit')).toBeVisible();
+  await expect(pageA.getByTestId('nav-jobs')).toBeVisible();
+
+  // API → UI dependency: KPIs match /api/stats
+  const statsRes0 = await pageA.request.get(`${BASE}/api/stats`);
+  expect(statsRes0.status()).toBe(200);
+  const stats0 = await statsRes0.json();
+  await expect(dashboardA.valueTotalItems).toHaveText(String(stats0.totalItems));
+  await expect(dashboardA.valueLowStock).toHaveText(String(stats0.lowStock));
+  await expect(dashboardA.valueOutOfStock).toHaveText(String(stats0.outOfStock));
+
+  // Recent table dependency: shows exactly 5 rows
+  await expect(dashboardA.recentRows()).toHaveCount(5);
+
+  // ── Tab validations: Reports ↔ API stats ────────────────────────────────────
+  await pageA.getByTestId('nav-reports').click();
+  await expect(pageA).toHaveURL(`${BASE}/reports`);
+  await expect(reportsA.pageTitle).toHaveText('Reports');
+  await expect(reportsA.categoryReport).toBeVisible();
+  await expect(reportsA.statusReport).toBeVisible();
+  await expect(reportsA.statusRows()).toHaveCount(3);
+
+  // Status counts in UI should sum to total items from API
+  const statusCounts = await reportsA.statusCounts().allTextContents();
+  const sum = statusCounts.map(t => Number((t || '').trim())).reduce((a, b) => a + b, 0);
+  expect(sum).toBe(stats0.totalItems);
+
+  // ── Tab validations: Inventory ↔ API inventory ──────────────────────────────
+  await pageA.getByTestId('nav-inventory').click();
+  await expect(pageA).toHaveURL(`${BASE}/inventory`);
+
+  // Cleanup from any prior run
+  if (await invA.rowBySku(TEST_SKU).isVisible().catch(() => false)) {
+    await invA.deleteBtn(TEST_SKU).click();
+    await pageA.waitForURL(`${BASE}/inventory`);
+  }
+
+  // ── CRUD: create → validate → edit → delete protection (kept clean) ─────────
+  await invA.newItemButton.click();
+  await expect(pageA).toHaveURL(`${BASE}/inventory/new`);
+  await formA.fill({ sku: TEST_SKU, name: 'Long Workflow Item', category: 'Testing', qty: '10', price: '5.00', status: 'in-stock' });
+  await formA.submit();
+  await expect(pageA).toHaveURL(`${BASE}/inventory`);
+  await expect(invA.rowBySku(TEST_SKU)).toBeVisible();
+
+  // Dependency check: API reflects created item
+  {
+    const res = await pageA.request.get(`${BASE}/api/inventory`);
+    expect(res.status()).toBe(200);
+    const items = await res.json();
+    expect(items.some((i: any) => i?.sku === TEST_SKU && i?.name === 'Long Workflow Item')).toBe(true);
+  }
+
+  // Duplicate SKU should show error (complex validation branch)
+  await invA.newItemButton.click();
+  await formA.fill({ sku: TEST_SKU, name: 'Duplicate', category: 'X', qty: '1', price: '1' });
+  await formA.submit();
+  await expect(formA.errorBanner).toBeVisible();
+  await pageA.goto(`${BASE}/inventory`);
+
+  // Open edit form and capture current version (to simulate a stale submission)
+  await invA.editBtn(TEST_SKU).click();
+  await expect(pageA).toHaveURL(/\/inventory\/\d+\/edit/);
+
+  const editUrl = pageA.url();
+  const idMatch = /\/inventory\/(\d+)\/edit/.exec(editUrl);
+  expect(idMatch?.[1]).toBeTruthy();
+  const itemId = idMatch![1];
+  const staleVersion = (await pageA.getByTestId('input-version').inputValue()).trim();
+  expect(staleVersion).toMatch(/^\d+$/);
+
+  // First edit saves successfully (bumps version)
+  await formA.fill({ qty: '11', status: 'low-stock', name: 'Long Workflow Updated A' });
+  await formA.submit();
+  await expect(pageA).toHaveURL(`${BASE}/inventory`);
+  await expect(invA.rowBySku(TEST_SKU).locator('[data-testid="qty"]')).toHaveText('11');
+  await expect(invA.rowBySku(TEST_SKU).locator('[data-testid="status"] .badge')).toContainText('low stock');
+
+  // Dependency check: stats endpoint is consistent after update
+  {
+    const statsRes = await pageA.request.get(`${BASE}/api/stats`);
+    expect(statsRes.status()).toBe(200);
+    const stats = await statsRes.json();
+    expect(stats.totalItems).toBeGreaterThanOrEqual(10);
+    expect(stats.inStock + stats.lowStock + stats.outOfStock).toBe(stats.totalItems);
+  }
+
+  // Simulate an external update (same session) to bump version behind the scenes.
+  // Grab the latest version from the API so we don't rely on assumptions.
+  const latestRes = await pageA.request.get(`${BASE}/api/inventory/${itemId}`);
+  expect(latestRes.status()).toBe(200);
+  const latest = await latestRes.json();
+  expect(String(latest.id)).toBe(String(itemId));
+  expect(latest.sku).toBe(TEST_SKU);
+  expect(String(latest.version || '')).toMatch(/^\d+$/);
+
+  await pageA.request.post(`${BASE}/inventory/${itemId}/edit`, {
+    form: {
+      sku: TEST_SKU,
+      name: 'External Update',
+      category: 'Testing',
+      qty: '13',
+      price: '5.00',
+      status: 'in-stock',
+      version: String(latest.version), // must match current version
+    },
+  });
+
+  await pageA.goto(`${BASE}/inventory/${itemId}/edit`);
+  await expect(pageA).toHaveURL(/\/inventory\/\d+\/edit/);
+  // Force stale version submit by sending the old version value
+  // Hidden field, so bypass visibility constraints by setting value via evaluate().
+  await pageA.getByTestId('input-version').evaluate((el, v) => {
+    (el as any).value = v;
+  }, staleVersion);
+  await formA.fill({ qty: '12', name: 'Long Workflow Updated B' });
+  await formA.submit();
+  await expect(formA.errorBanner).toBeVisible();
+  await expect(formA.errorBanner).toContainText('updated by someone else');
+
+  // Dependency check: stale update did NOT overwrite the external update
+  await pageA.goto(`${BASE}/inventory`);
+  await expect(invA.rowBySku(TEST_SKU).locator('[data-testid="qty"]')).toHaveText('13');
+
+  // ── Background jobs (reconcile ~1m default) ─────────────────────────────────
+  await pageA.goto(`${BASE}/jobs`);
+  await expect(pageA.getByTestId('page-title')).toHaveText('Jobs');
+  await pageA.getByTestId('btn-start-reconcile').click();
+  await expect(pageA.getByTestId('job-status')).toHaveText(/running|completed/);
+
+  // Poll until reconcile completes using API (more reliable than DOM polling)
+  await expect(pageA.getByTestId('job-id')).not.toHaveText('—');
+  const jobId = (await pageA.getByTestId('job-id').textContent())?.trim();
+  expect(jobId).toMatch(/^\d+$/);
+  await expect
+    .poll(async () => {
+      const r = await pageA.request.get(`${BASE}/api/jobs/${jobId}`);
+      if (!r.ok()) return 'unknown';
+      const j = await r.json();
+      return String(j.status || '').trim();
+    }, { timeout: 120_000, intervals: [1500, 1500, 2000, 2500, 3000] })
+    .toBe('completed');
+
+  await expect(pageA.getByTestId('job-progress')).toHaveText('100%');
+
+  // Start a backup job (expected to fail) and verify error surfaced
+  await pageA.getByTestId('btn-start-backup').click();
+  await expect(pageA.getByTestId('job-status')).toHaveText(/running|failed/);
+  await expect(pageA.getByTestId('job-id')).not.toHaveText('—');
+  await expect(pageA.getByTestId('job-id')).not.toHaveText(jobId || '');
+  const backupId = (await pageA.getByTestId('job-id').textContent())?.trim();
+  expect(backupId).toMatch(/^\d+$/);
+
+  await expect
+    .poll(async () => {
+      const r = await pageA.request.get(`${BASE}/api/jobs/${backupId}`);
+      if (!r.ok()) return 'unknown';
+      const j = await r.json();
+      return String(j.status || '').trim();
+    }, { timeout: 90_000, intervals: [1500, 1500, 2000, 2500, 3000] })
+    .toBe('failed');
+
+  await expect(pageA.getByTestId('job-error')).toBeVisible();
+  await expect(pageA.getByTestId('job-error')).toContainText('Simulated failure');
+
+  // Start reconcile again and cancel it
+  await pageA.getByTestId('btn-start-reconcile').click();
+  await expect(pageA.getByTestId('job-id')).not.toHaveText('—');
+  await expect(pageA.getByTestId('job-id')).not.toHaveText(backupId || '');
+  const cancelId = (await pageA.getByTestId('job-id').textContent())?.trim();
+  expect(cancelId).toMatch(/^\d+$/);
+  await pageA.getByTestId('btn-cancel-job').click();
+
+  await expect
+    .poll(async () => {
+      const r = await pageA.request.get(`${BASE}/api/jobs/${cancelId}`);
+      if (!r.ok()) return 'unknown';
+      const j = await r.json();
+      return String(j.status || '').trim();
+    }, { timeout: 30_000, intervals: [800, 1000, 1500] })
+    .toBe('cancelled');
+
+  // ── Verify audit page includes create + update + job actions and IDs ────────
+  await pageA.goto(`${BASE}/audit`);
+  await expect(pageA.getByTestId('page-title')).toHaveText('Audit Log');
+  const auditTable = pageA.getByTestId('audit-tbody');
+  await expect(auditTable).toContainText('CREATE_ITEM');
+  await expect(auditTable).toContainText('UPDATE_ITEM');
+  await expect(auditTable).toContainText('START_JOB');
+  await expect(auditTable).toContainText('COMPLETE_JOB');
+  await expect(auditTable).toContainText('FAIL_JOB');
+  await expect(auditTable).toContainText('CANCEL_JOB');
+  await expect(auditTable).toContainText(TEST_SKU);
+
+  // Completed reconcile job appears with its id
+  await expect(auditTable).toContainText(`JOB=reconcile id=${jobId}`);
+  // Failed backup job appears with its id and error
+  await expect(auditTable).toContainText(`JOB=backup id=${backupId}`);
+  await expect(auditTable).toContainText('Simulated failure: upstream storage unavailable');
+  // Cancelled reconcile job appears with its id
+  await expect(auditTable).toContainText(`JOB=reconcile id=${cancelId}`);
+
+  // Dependency check: audit API includes job completion
+  {
+    const auditRes = await pageA.request.get(`${BASE}/api/audit`);
+    expect(auditRes.status()).toBe(200);
+    const events = await auditRes.json();
+    expect(Array.isArray(events)).toBe(true);
+    expect(events.some((e: any) => e?.action === 'COMPLETE_JOB')).toBe(true);
+    expect(events.some((e: any) => e?.action === 'FAIL_JOB')).toBe(true);
+    expect(events.some((e: any) => e?.action === 'CANCEL_JOB')).toBe(true);
+  }
+
+  // Cleanup item to avoid polluting subsequent runs
+  await pageA.goto(`${BASE}/inventory`);
+  await invA.deleteBtn(TEST_SKU).click();
+  await expect(pageA).toHaveURL(`${BASE}/inventory`);
+
+  // Final dependency check: item removed from API list
+  {
+    const res = await pageA.request.get(`${BASE}/api/inventory`);
+    expect(res.status()).toBe(200);
+    const items = await res.json();
+    expect(items.some((i: any) => i?.sku === TEST_SKU)).toBe(false);
+  }
 });
