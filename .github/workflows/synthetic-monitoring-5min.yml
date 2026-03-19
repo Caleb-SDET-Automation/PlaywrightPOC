@@ -74,6 +74,8 @@ jobs:
         with:
           name: playwright-reports
           path: |
+            reports/html-demo
+            reports/artifacts-demo
             reports/html
             reports/json
             reports/artifacts
