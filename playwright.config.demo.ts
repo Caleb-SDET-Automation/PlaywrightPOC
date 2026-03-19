@@ -33,7 +33,7 @@ export default defineConfig({
 
   use: {
     baseURL:    `http://localhost:${PORT}`,
-    headless:   false,
+    headless:   process.env.HEADLESS !== 'false',
     screenshot: 'on',
     video:      { mode: 'on' },
     trace:      'on',

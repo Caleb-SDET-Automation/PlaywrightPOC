@@ -5,6 +5,7 @@ import { OrangeHrmSidePanel, OrangeHrmTopBar } from '../pages/orangehrm/OrangeHr
 import { PimEmployeeListPage } from '../pages/orangehrm/PimEmployeeListPage';
 import { PimAddEmployeePage } from '../pages/orangehrm/PimAddEmployeePage';
 import { PimPersonalDetailsPage } from '../pages/orangehrm/PimPersonalDetailsPage';
+import { createOrangeHrmEmployeeTestData } from '../test-data/orangehrm.data';
 
 /**
  * OrangeHRM Demo — 4 flows
@@ -64,9 +65,7 @@ test('OrangeHRM Flow 4: CRUD employee and logout', async ({ page }) => {
   await sidePanel.goToPim();
   await list.expectLoaded();
 
-  const ts = Date.now();
-  const firstName = `PW${ts}`;
-  const lastName = `User${String(ts).slice(-4)}`;
+  const { firstName, lastName, updatedFirstName } = createOrangeHrmEmployeeTestData();
 
   // Personal Details page
   await list.clickAdd();
@@ -76,22 +75,21 @@ test('OrangeHRM Flow 4: CRUD employee and logout', async ({ page }) => {
 
   // ── UPDATE: edit a field (First Name) ───────────────────────────────────────
   // Use a stable field we know exists on Personal Details.
-  const updatedFirstName = `${firstName}U`;
-  await details.updateFirstName(updatedFirstName);
+  const savedFirstName = await details.updateFirstName(updatedFirstName);
 
   // ── READ: verify in Employee List search ────────────────────────────────────
   await sidePanel.goToPim();
   await list.expectLoaded();
-  await list.searchByFullName(`${updatedFirstName} ${lastName}`);
-  await expect(list.resultsTable).toContainText(updatedFirstName);
+  await list.searchByFullName(`${savedFirstName} ${lastName}`);
+  await expect(list.resultsTable).toContainText(savedFirstName);
   await expect(list.resultsTable).toContainText(lastName);
 
   // ── DELETE: remove the employee from list ───────────────────────────────────
-  await list.deleteEmployee(updatedFirstName, lastName);
+  await list.deleteEmployee(savedFirstName, lastName);
 
   // Re-search to confirm it’s gone
-  await list.searchByFullName(`${updatedFirstName} ${lastName}`);
-  await expect(list.resultsTable).not.toContainText(updatedFirstName);
+  await list.searchByFullName(`${savedFirstName} ${lastName}`);
+  await expect(list.resultsTable).not.toContainText(savedFirstName);
   await expect(list.resultsTable).not.toContainText(lastName);
 
   // Logout via user dropdown

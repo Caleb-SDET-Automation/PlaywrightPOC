@@ -23,10 +23,15 @@ export class PimPersonalDetailsPage {
     await expect(this.fullNameHeading(re)).toBeVisible();
   }
 
-  async updateFirstName(firstName: string) {
-    await this.firstNameInput.fill(firstName);
+  async updateFirstName(firstName: string): Promise<string> {
+    const maxLengthAttr = await this.firstNameInput.getAttribute('maxlength');
+    const maxLength = maxLengthAttr ? Number.parseInt(maxLengthAttr, 10) : undefined;
+    const expected = Number.isFinite(maxLength) ? firstName.slice(0, maxLength) : firstName;
+
+    await this.firstNameInput.fill(expected);
     await this.saveButton.click();
-    await expect(this.firstNameInput).toHaveValue(firstName);
+    await expect(this.firstNameInput).toHaveValue(expected);
+    return await this.firstNameInput.inputValue();
   }
 }
 
